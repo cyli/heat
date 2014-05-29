@@ -75,6 +75,40 @@ class CooldownMixin(object):
         self.metadata_set(metadata)
 
 
+def _calculate_new_capacity(current, adjustment, adjustment_type,
+                            minimum, maximum):
+    """
+    Given the current capacity, calculates the new capacity which results
+    from applying the given adjustment of the given adjustment-type.  The
+    new capacity will be kept within the maximum and minimum bounds.
+    """
+    if adjustment_type == CHANGE_IN_CAPACITY:
+        new_capacity = current + adjustment
+    elif adjustment_type == EXACT_CAPACITY:
+        new_capacity = adjustment
+    else:
+        # PercentChangeInCapacity
+        delta = current * adjustment / 100.0
+        if math.fabs(delta) < 1.0:
+            rounded = int(math.ceil(delta) if delta > 0.0
+                          else math.floor(delta))
+        else:
+            rounded = int(math.floor(delta) if delta > 0.0
+                          else math.ceil(delta))
+        new_capacity = current + rounded
+
+    if new_capacity > maximum:
+        LOG.info(_('truncating growth to %s') % maximum)
+        return maximum
+
+    if new_capacity < minimum:
+        LOG.info(_('truncating shrinkage to %s') % minimum)
+        return minimum
+
+    return new_capacity
+
+
+
 class InstanceGroup(stack_resource.StackResource):
 
     PROPERTIES = (
@@ -607,17 +641,14 @@ class AutoScalingGroup(InstanceGroup, CooldownMixin):
             # Replace instances first if launch configuration has changed
             self._try_rolling_update(prop_diff)
 
-            # Get the current capacity, we may need to adjust if
-            # MinSize or MaxSize has changed
-            capacity = len(self.get_instances())
-
             if (self.DESIRED_CAPACITY in prop_diff and
                 self.properties[self.DESIRED_CAPACITY] is not None):
 
                 self.adjust(self.properties[self.DESIRED_CAPACITY],
                             adjustment_type=EXACT_CAPACITY)
             else:
-                self.adjust(capacity, adjustment_type=EXACT_CAPACITY)
+                current_capacity = len(self.get_instances())
+                self.adjust(current_capacity, adjustment_type=EXACT_CAPACITY)
 
 
     def adjust(self, adjustment, adjustment_type=CHANGE_IN_CAPACITY):
@@ -632,31 +663,11 @@ class AutoScalingGroup(InstanceGroup, CooldownMixin):
             return
 
         capacity = len(self.get_instances())
-        if adjustment_type == CHANGE_IN_CAPACITY:
-            new_capacity = capacity + adjustment
-        elif adjustment_type == EXACT_CAPACITY:
-            new_capacity = adjustment
-        else:
-            # PercentChangeInCapacity
-            delta = capacity * adjustment / 100.0
-            if math.fabs(delta) < 1.0:
-                rounded = int(math.ceil(delta) if delta > 0.0
-                              else math.floor(delta))
-            else:
-                rounded = int(math.floor(delta) if delta > 0.0
-                              else math.ceil(delta))
-            new_capacity = capacity + rounded
-
-        upper = self.properties[self.MAX_SIZE]
         lower = self.properties[self.MIN_SIZE]
+        upper = self.properties[self.MAX_SIZE]
 
-        if new_capacity > upper:
-            LOG.info(_('truncating growth to %s') % upper)
-            new_capacity = upper
-
-        if new_capacity < lower:
-            LOG.info(_('truncating shrinkage to %s') % lower)
-            new_capacity = lower
+        new_capacity = _calculate_new_capacity(capacity, adjustment,
+                                               adjustment_type, lower, upper)
 
         if new_capacity == capacity:
             LOG.debug('no change in capacity %d' % capacity)
