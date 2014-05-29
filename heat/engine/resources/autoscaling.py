@@ -611,20 +611,14 @@ class AutoScalingGroup(InstanceGroup, CooldownMixin):
             # MinSize or MaxSize has changed
             capacity = len(self.get_instances())
 
-            # Figure out if an adjustment is required
-            new_capacity = None
-            if self.MIN_SIZE in prop_diff:
-                if capacity < self.properties[self.MIN_SIZE]:
-                    new_capacity = self.properties[self.MIN_SIZE]
-            if self.MAX_SIZE in prop_diff:
-                if capacity > self.properties[self.MAX_SIZE]:
-                    new_capacity = self.properties[self.MAX_SIZE]
-            if self.DESIRED_CAPACITY in prop_diff:
-                if self.properties[self.DESIRED_CAPACITY] is not None:
-                    new_capacity = self.properties[self.DESIRED_CAPACITY]
+            if (self.DESIRED_CAPACITY in prop_diff and
+                self.properties[self.DESIRED_CAPACITY] is not None):
 
-            if new_capacity is not None:
-                self.adjust(new_capacity, adjustment_type=EXACT_CAPACITY)
+                self.adjust(self.properties[self.DESIRED_CAPACITY],
+                            adjustment_type=EXACT_CAPACITY)
+            else:
+                self.adjust(capacity, adjustment_type=EXACT_CAPACITY)
+
 
     def adjust(self, adjustment, adjustment_type=CHANGE_IN_CAPACITY):
         """
@@ -657,19 +651,12 @@ class AutoScalingGroup(InstanceGroup, CooldownMixin):
         lower = self.properties[self.MIN_SIZE]
 
         if new_capacity > upper:
-            if upper > capacity:
-                LOG.info(_('truncating growth to %s') % upper)
-                new_capacity = upper
-            else:
-                LOG.warn(_('can not exceed %s') % upper)
-                return
+            LOG.info(_('truncating growth to %s') % upper)
+            new_capacity = upper
+
         if new_capacity < lower:
-            if lower < capacity:
-                LOG.info(_('truncating shrinkage to %s') % lower)
-                new_capacity = lower
-            else:
-                LOG.warn(_('can not be less than %s') % lower)
-                return
+            LOG.info(_('truncating shrinkage to %s') % lower)
+            new_capacity = lower
 
         if new_capacity == capacity:
             LOG.debug('no change in capacity %d' % capacity)
